@@ -12,6 +12,7 @@ pnpm-debug.log*
 # ppt和源码/
 # mcp-servers/
 
+.front/settings.json
 
 # runtime data
 pids
