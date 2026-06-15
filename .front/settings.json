@@ -1,5 +1,0 @@
-{
-    "model" : "deepseek-v4-flash",
-    "baseURL" : "https://api.deepseek.com",
-    "apiKey":"sk-fb684c529e0e47e3a45a60a1d667282d"
-}
