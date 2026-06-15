@@ -1,0 +1,53 @@
+# dependencies
+node_modules/
+
+# logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ppt和源码/
+# mcp-servers/
+
+
+# runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+
+# coverage
+coverage/
+*.lcov
+.nyc_output/
+
+# build outputs
+build/
+dist/
+keys/private.key
+keys/public.key
+
+# environment files
+.env
+.env.*
+
+
+# cache
+.cache/
+.tmp/
+tmp/
+
+# editors and OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# misc
+*.tgz
