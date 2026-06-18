@@ -16,6 +16,7 @@ marked.setOptions({
   }),
 });
 
+
 /**
  * 按指定颜色输出普通终端文本。
  *
@@ -41,10 +42,10 @@ function logMarkdown(markdownText) {
     return;
   }
 
-  try {
-    const rendered = marked.parse(String(markdownText));
+  try { // 自定义终端样式
+    const rendered = marked.parse(String(markdownText)); 
     console.log(rendered);
-  } catch {
+  } catch { // 当上面的marked.setoption报错时使用
     log(markdownText, "white");
   }
 }

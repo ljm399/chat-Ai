@@ -11,14 +11,21 @@ import logger from "./logger.js";
  */
 export function writeHistoryToFrontFile(data) {
   try {
-    const homeDir = os.homedir();
-    const historyRootDir = path.join(homeDir, ".front", "history");
-    const currentWorkingDir = process.cwd();
-    const projectName = path.basename(currentWorkingDir);
-    const projectHistoryDir = path.join(historyRootDir, projectName);
+    // 当写入用户目录才使用
+    // const homeDir = os.homedir();
+    // const historyRootDir = path.join(homeDir, ".codex", ".front", "history");
+    // const currentWorkingDir = process.cwd();    
+    // const projectName = path.basename(currentWorkingDir);
+    // const projectHistoryDir = path.join(currentWorkingDir, projectName);
 
+    // 自己直接创建到项目本地，方便调试
+    const currentWorkingDir = process.cwd();    
+    const projectHistoryDir = path.join(currentWorkingDir, '.front','history');    
+
+    // 没有就会自己创建
     fs.mkdirSync(projectHistoryDir, { recursive: true });
 
+    // 用字符串，因为只有当用户取消对话才会写入，而不是问一句就写入
     const fileName = `${Date.now()}.json`;
     const filePath = path.join(projectHistoryDir, fileName);
     const serializedData = JSON.stringify(data, null, 2);

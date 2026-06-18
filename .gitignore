@@ -13,6 +13,7 @@ pnpm-debug.log*
 # mcp-servers/
 
 .front/settings.json
+.front/
 
 # runtime data
 pids
