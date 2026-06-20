@@ -18,6 +18,7 @@ export function welcomeLog() {
   logger.log("└──────────────────────────────────────────────┘", borderColor);
   logger.log("直接输入问题后按 Enter 发送。", hintColor);
   logger.log("输入 / 选择指令模板。", hintColor);
+  logger.log("输入 /add 可自定义指令。", hintColor);
   logger.log("输入 @ 选择项目文件作为本轮上下文。", hintColor);
   logger.log("输入 'exit' 或 'quit' 退出程序。", hintColor);
   logger.log("", "white");

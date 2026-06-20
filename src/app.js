@@ -15,9 +15,17 @@ import {
   clearInputFrame,
   renderInputFrame,
 } from "./utils/terminalRenderer.js";
+import {
+  getRulesContext,
+  getUserContext,
+  readSystemContext,
+} from "./utils/contextReader.js";
 
 const openai = createOpenAIClient();
 const messages = [];
+let systemMessage = null;
+let userContextMessage = null;
+let lastRulesContextMessage = null;
 
 const state = {
   commandPrefix: "",
@@ -56,7 +64,14 @@ function persistHistory() {
     return null;
   }
 
-  return writeHistoryToFrontFile(messages);
+  const historyMessages = [
+    ...(systemMessage ? [systemMessage] : []),
+    ...(userContextMessage ? [userContextMessage] : []),
+    ...(lastRulesContextMessage ? [lastRulesContextMessage] : []),
+    ...messages,
+  ];
+
+  return writeHistoryToFrontFile(historyMessages);
 }
 
 function cleanupInput() {
@@ -432,6 +447,16 @@ async function submitCurrentInput() {
   clearInputFrame();
 
   try {
+    const rulesContext = await getRulesContext(state.selectedContextFile);
+    const rulesContextMessage = rulesContext
+      ? {
+          role: "user",
+          content: rulesContext,
+        }
+      : null;
+
+    lastRulesContextMessage = rulesContextMessage;
+
     const builtMessage = await buildUserMessage({
       rawInput: trimmedInput,
       selectedContextFile: state.selectedContextFile,
@@ -449,9 +474,16 @@ async function submitCurrentInput() {
     const spinner = ora("AI 正在思考...").start();
 
     try {
+      const requestMessages = [
+        ...(systemMessage ? [systemMessage] : []),
+        ...(userContextMessage ? [userContextMessage] : []),
+        ...(rulesContextMessage ? [rulesContextMessage] : []),
+        ...messages,
+      ];
+
       const aiMessage = await getAIResponse({
         openai,
-        messages,
+        messages: requestMessages,
       });
 
       messages.push({
@@ -634,6 +666,24 @@ function startInputLoop() {
   rerender();
 }
 
+async function initSystemMessage() {
+  const systemPrompt = await readSystemContext();
+
+  systemMessage = {
+    role: "system",
+    content: systemPrompt,
+  };
+}
+
+async function initUserContextMessage() {
+  const userContext = await getUserContext();
+
+  userContextMessage = {
+    role: "user",
+    content: userContext,
+  };
+}
+
 process.on("SIGINT", () => {
   logger.log("\n检测到退出操作，正在保存对话记录...", "yellow");
   safeClose();
@@ -656,5 +706,7 @@ process.on("unhandledRejection", (reason) => {
   process.exit(1);
 });
 
+await initSystemMessage();
+await initUserContextMessage();
 welcomeLog();
 startInputLoop();
