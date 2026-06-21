@@ -2,6 +2,8 @@ import fs from "fs";
 import path from "path";
 import OpenAI from "openai";
 import logger from "../utils/logger.js";
+import { excuteTool } from "../tool/index.js";
+import { transformToOpenAi } from "../tool/util.js";
 import {
   getCurrentWorkingDir,
   getUserHomeDir,
@@ -86,51 +88,100 @@ export function createOpenAIClient() {
  *
  * @param {object} questionObj - 请求参数对象。
  * @param {OpenAI|null} questionObj.openai - OpenAI 客户端实例。
+ * @param {Array<object>} [questionObj.contextMessageList] - 固定上下文消息数组。
  * @param {Array<object>} questionObj.messages - 对话消息数组。
  * @param {string} [questionObj.model] - 指定模型名称。
- * @returns {Promise<{role: string, content: string}>} AI 返回的消息对象。
+ * @param {{tools?: object[], toolNameMap?: Record<string, {callTool: Function}>}} [questionObj.toolRuntime] - 统一工具运行时。
+ * @returns {Promise<Array<object>>} 包含完整 tool use 过程的消息数组。
  */
 export async function getAIResponse(questionObj) {
   const config = readConfig();
-  const { openai, messages = [], model } = questionObj ?? {};
+  const {
+    openai,
+    contextMessageList = [],
+    messages = [],
+    model,
+    toolRuntime,
+  } = questionObj ?? {};
   const targetModel = model || config.model || DEFAULT_MODEL;
+  const requestMessages = [...contextMessageList, ...messages];
 
   if (!openai) {
-    return {
-      role: "assistant",
-      content:
-        "当前未成功初始化 OpenAI 客户端，请检查 .front/settings.json 中的 apiKey 和 baseURL 配置。",
-    };
+    return [
+      ...messages,
+      {
+        role: "assistant",
+        content:
+          "当前未成功初始化 OpenAI 客户端，请检查 .front/settings.json 中的 apiKey 和 baseURL 配置。",
+      },
+    ];
   }
 
   try {
-    const completion = await openai.chat.completions.create({
+    const completionOptions = {
       model: targetModel,
-      messages,
+      messages: requestMessages,
       temperature: 0.7,
-    });
+    };
+
+    if (toolRuntime?.tools?.length) {
+      completionOptions.tools = transformToOpenAi(toolRuntime.tools);
+    }
+
+    const completion = await openai.chat.completions.create(completionOptions);
 
     const message = completion?.choices?.[0]?.message;
 
     if (!message) {
-      return {
-        role: "assistant",
-        content: "模型未返回有效内容，请稍后重试。",
-      };
+      return [
+        ...messages,
+        {
+          role: "assistant",
+          content: "模型未返回有效内容，请稍后重试。",
+        },
+      ];
     }
 
-    return {
-      role: message.role || "assistant",
-      content: message.content || "",
-    };
+    messages.push(message);
+
+    if (message.tool_calls?.length) {
+      for (const toolCall of message.tool_calls) {
+        const functionName = toolCall.function.name;
+        const functionArgs = JSON.parse(toolCall.function.arguments || "{}");
+        const excuteResult = await excuteTool(
+          toolRuntime,
+          functionName,
+          functionArgs
+        );
+
+        messages.push({
+          tool_call_id: toolCall.id,
+          role: "tool",
+          content: excuteResult,
+        });
+      }
+
+      return getAIResponse({
+        openai,
+        contextMessageList,
+        messages,
+        model,
+        toolRuntime,
+      });
+    }
+
+    return messages;
   } catch (error) {
     logger.log(`请求大模型失败: ${error.message}`, "red");
 
-    return {
-      role: "assistant",
-      content:
-        "请求 AI 服务时出现异常，请检查网络连接、模型名称或接口配置后重试。",
-    };
+    return [
+      ...messages,
+      {
+        role: "assistant",
+        content:
+          "请求 AI 服务时出现异常，请检查网络连接、模型名称或接口配置后重试。",
+      },
+    ];
   }
 }
 

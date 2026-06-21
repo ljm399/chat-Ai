@@ -17,15 +17,22 @@ import {
 } from "./utils/terminalRenderer.js";
 import {
   getRulesContext,
+  getSkillHeaders,
   getUserContext,
   readSystemContext,
 } from "./utils/contextReader.js";
+import { getToolRuntime } from "./tool/index.js";
 
 const openai = createOpenAIClient();
 const messages = [];
 let systemMessage = null;
 let userContextMessage = null;
+let skillHeadersMessage = null;
 let lastRulesContextMessage = null;
+let toolRuntime = {
+  tools: [],
+  toolNameMap: {},
+};
 
 const state = {
   commandPrefix: "",
@@ -67,6 +74,7 @@ function persistHistory() {
   const historyMessages = [
     ...(systemMessage ? [systemMessage] : []),
     ...(userContextMessage ? [userContextMessage] : []),
+    ...(skillHeadersMessage ? [skillHeadersMessage] : []),
     ...(lastRulesContextMessage ? [lastRulesContextMessage] : []),
     ...messages,
   ];
@@ -474,26 +482,26 @@ async function submitCurrentInput() {
     const spinner = ora("AI 正在思考...").start();
 
     try {
-      const requestMessages = [
-        ...(systemMessage ? [systemMessage] : []),
-        ...(userContextMessage ? [userContextMessage] : []),
-        ...(rulesContextMessage ? [rulesContextMessage] : []),
-        ...messages,
-      ];
-
-      const aiMessage = await getAIResponse({
+      const nowMessage = await getAIResponse({
         openai,
-        messages: requestMessages,
+        toolRuntime,
+        contextMessageList: [
+          ...(systemMessage ? [systemMessage] : []),
+          ...(userContextMessage ? [userContextMessage] : []),
+          ...(skillHeadersMessage ? [skillHeadersMessage] : []),
+          ...(rulesContextMessage ? [rulesContextMessage] : []),
+        ],
+        messages,
       });
-
-      messages.push({
-        role: aiMessage.role || "assistant",
-        content: aiMessage.content || "",
-      });
+      const lastAssistantMessage = [...nowMessage]
+        .reverse()
+        .find((message) => message.role === "assistant");
 
       spinner.stop();
       logger.log("", "white");
-      logger.logMarkdown(aiMessage.content || "AI 暂未返回内容。");
+      logger.logMarkdown(
+        lastAssistantMessage?.content || "AI 暂未返回内容。"
+      );
       logger.log("", "white");
     } catch (error) {
       spinner.stop();
@@ -684,6 +692,15 @@ async function initUserContextMessage() {
   };
 }
 
+async function initSkillHeadersMessage() {
+  const skillHeaders = await getSkillHeaders();
+
+  skillHeadersMessage = {
+    role: "user",
+    content: skillHeaders,
+  };
+}
+
 process.on("SIGINT", () => {
   logger.log("\n检测到退出操作，正在保存对话记录...", "yellow");
   safeClose();
@@ -708,5 +725,7 @@ process.on("unhandledRejection", (reason) => {
 
 await initSystemMessage();
 await initUserContextMessage();
+await initSkillHeadersMessage();
+toolRuntime = await getToolRuntime();
 welcomeLog();
 startInputLoop();

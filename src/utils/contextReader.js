@@ -9,8 +9,10 @@ const PROJECT_ROOT = path.resolve(__dirname, "../..");
 const DOCS_DIR = path.resolve(__dirname, "../docs");
 const SYSTEM_DOC_PATH = path.join(DOCS_DIR, "systemDoc.md");
 const USER_CONTEXT_DOC_PATH = path.join(DOCS_DIR, "userContext.md");
+const SKILL_TEMPLATE_DOC_PATH = path.join(DOCS_DIR, "skillTemplate.md");
 const PROJECT_FRONT_MD_PATH = path.join(PROJECT_ROOT, ".front.md");
 const PROJECT_RULES_DIR = path.join(PROJECT_ROOT, ".front", "rules");
+const PROJECT_SKILLS_DIR = path.join(PROJECT_ROOT, ".front", "skills");
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
 /**
@@ -88,6 +90,20 @@ export async function getRulesContext(selectedContextFile) {
 }
 
 /**
+ * 读取项目根目录和用户根目录下的 skills 文件头信息，并替换到 skill 模板中。
+ * 仅提取 frontmatter 里的 name 和 description。
+ *
+ * @returns {Promise<string>} 替换完成后的 skill 上下文
+ */
+export async function getSkillHeaders() {
+  const template = await fs.readFile(SKILL_TEMPLATE_DOC_PATH, "utf-8");
+  const skillHeaders = await readSkillHeaders();
+  const skillContent = skillHeaders.join("\n\n");
+
+  return template.replaceAll("${skillcontent}", skillContent);
+}
+
+/**
  * 安全读取可选文件，不存在时返回空字符串。
  *
  * @param {string} filePath 文件绝对路径
@@ -103,6 +119,30 @@ async function readOptionalFile(filePath) {
 
     throw error;
   }
+}
+
+/**
+ * 读取项目与用户目录下的 skills 文件头信息。
+ *
+ * @returns {Promise<string[]>} skill 头信息字符串列表
+ */
+async function readSkillHeaders() {
+  const userSkillsDir = path.join(os.homedir(), ".front", "skills");
+  const skillFiles = await Promise.all([
+    readSkillHeaderFiles(PROJECT_SKILLS_DIR),
+    readSkillHeaderFiles(userSkillsDir),
+  ]);
+
+  return skillFiles
+    .flat()
+    .sort((firstSkill, secondSkill) =>
+      firstSkill.source.localeCompare(secondSkill.source, "zh-CN") ||
+      firstSkill.fileName.localeCompare(secondSkill.fileName, "zh-CN")
+    )
+    .map(
+      (skillHeader) =>
+        `skill[${skillHeader.fileName}](${skillHeader.filePath})\nname: ${skillHeader.name}\ndescription: ${skillHeader.description}`
+    );
 }
 
 /**
@@ -142,18 +182,82 @@ async function readRuleFiles() {
 }
 
 /**
+ * 读取指定目录下的 skill 文件，并提取 name 与 description。
+ *
+ * @param {string} skillsDir skill 目录
+ * @returns {Promise<Array<{source: string, fileName: string, name: string, description: string}>>} skill 头信息列表
+ */
+async function readSkillHeaderFiles(skillsDir) {
+  try {
+    const entries = await fs.readdir(skillsDir, { withFileTypes: true });
+    const skillHeaders = await Promise.all(entries.map((entry) => readSkillHeaderEntry(skillsDir, entry)));
+
+    return skillHeaders.filter(Boolean);
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * 读取单个 skill 条目，兼容“文件”与“目录/SKILL.md”两种结构。
+ *
+ * @param {string} skillsDir skill 根目录
+ * @param {import("fs").Dirent} entry 目录项
+ * @returns {Promise<{source: string, fileName: string, name: string, description: string}|null>} skill 头信息
+ */
+async function readSkillHeaderEntry(skillsDir, entry) {
+  let fileName = entry.name;
+  let targetFilePath = path.join(skillsDir, entry.name);
+
+  if (entry.isDirectory()) {
+    fileName = entry.name;
+    targetFilePath = path.join(skillsDir, entry.name, "SKILL.md");
+  } else if (!entry.isFile()) {
+    return null;
+  }
+
+  try {
+    const rawContent = await fs.readFile(targetFilePath, "utf-8");
+    const skillHeader = parseSkillHeader(rawContent);
+
+    if (!skillHeader) {
+      return null;
+    }
+
+    return {
+      source: skillsDir,
+      fileName,
+      filePath: targetFilePath,
+      name: skillHeader.name,
+      description: skillHeader.description,
+    };
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+/**
  * 解析规则文件 frontmatter 中的 paths 和正文内容。
  *
  * @param {string} rawContent 规则文件原始内容
  * @returns {{paths: string[], content: string}} 解析结果
  */
 function parseRuleFile(rawContent) {
-  const matchedFrontmatter = rawContent.match(FRONTMATTER_PATTERN);
+  const normalizedContent = stripBom(rawContent);
+  const matchedFrontmatter = normalizedContent.match(FRONTMATTER_PATTERN);
 
   if (!matchedFrontmatter) {
     return {
       paths: [],
-      content: rawContent,
+      content: normalizedContent,
     };
   }
 
@@ -187,6 +291,57 @@ function parseRuleFile(rawContent) {
     paths,
     content: bodyContent,
   };
+}
+
+/**
+ * 从 skill 文件的 frontmatter 中提取 name 和 description。
+ *
+ * @param {string} rawContent skill 文件原始内容
+ * @returns {{name: string, description: string}|null} skill 头信息
+ */
+function parseSkillHeader(rawContent) {
+  const normalizedContent = stripBom(rawContent);
+  const matchedFrontmatter = normalizedContent.match(FRONTMATTER_PATTERN);
+
+  if (!matchedFrontmatter) {
+    return null;
+  }
+
+  const [, frontmatterContent] = matchedFrontmatter;
+  let name = "";
+  let description = "";
+
+  for (const line of frontmatterContent.split(/\r?\n/)) {
+    const trimmedLine = line.trim();
+
+    if (trimmedLine.startsWith("name:")) {
+      name = trimmedLine.slice("name:".length).trim();
+      continue;
+    }
+
+    if (trimmedLine.startsWith("description:")) {
+      description = trimmedLine.slice("description:".length).trim();
+    }
+  }
+
+  if (!name || !description) {
+    return null;
+  }
+
+  return {
+    name,
+    description,
+  };
+}
+
+/**
+ * 去掉文件内容开头可能存在的 UTF-8 BOM，避免 frontmatter 无法匹配。
+ *
+ * @param {string} content 文件内容
+ * @returns {string} 去除 BOM 后的内容
+ */
+function stripBom(content) {
+  return content.replace(/^\uFEFF/, "");
 }
 
 /**
@@ -245,4 +400,5 @@ export default {
   getSystemInfo,
   getUserContext,
   getRulesContext,
+  getSkillHeaders,
 };
