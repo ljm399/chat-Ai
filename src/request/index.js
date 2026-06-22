@@ -12,6 +12,36 @@ import {
 const DEFAULT_MODEL = "doubao-seed-2.0-code";
 
 /**
+ * 解析模型返回的 tool arguments。
+ * 当模型返回的 arguments 不是合法 JSON 时，不中断整轮对话，
+ * 而是抛出更明确的错误给上层转成 tool 结果回填。
+ *
+ * @param {string|undefined} rawArguments 模型返回的原始参数字符串
+ * @returns {Record<string, any>} 解析后的参数对象
+ */
+function parseToolArguments(rawArguments) {
+  const normalizedArguments = rawArguments || "{}";
+
+  try {
+    const parsedArguments = JSON.parse(normalizedArguments);
+
+    if (
+      parsedArguments === null ||
+      Array.isArray(parsedArguments) ||
+      typeof parsedArguments !== "object"
+    ) {
+      throw new Error("工具参数必须是 JSON 对象。");
+    }
+
+    return parsedArguments;
+  } catch (error) {
+    throw new Error(
+      `工具参数不是合法 JSON: ${error.message}。原始内容: ${normalizedArguments}`
+    );
+  }
+}
+
+/**
  * 读取项目级或全局级配置文件。
  *
  * @returns {Record<string, any>} 解析后的配置对象，读取失败时返回空对象。
@@ -92,6 +122,8 @@ export function createOpenAIClient() {
  * @param {Array<object>} questionObj.messages - 对话消息数组。
  * @param {string} [questionObj.model] - 指定模型名称。
  * @param {{tools?: object[], toolNameMap?: Record<string, {callTool: Function}>}} [questionObj.toolRuntime] - 统一工具运行时。
+ * @param {(toolInfo: {name: string, args: Record<string, any>}) => (void|Promise<void>)} [questionObj.onToolCall] - 工具调用前的终端回调。
+ * @param {(toolInfo: {name: string, result: string}) => (void|Promise<void>)} [questionObj.onToolResult] - 工具调用后的终端回调。
  * @returns {Promise<Array<object>>} 包含完整 tool use 过程的消息数组。
  */
 export async function getAIResponse(questionObj) {
@@ -102,6 +134,8 @@ export async function getAIResponse(questionObj) {
     messages = [],
     model,
     toolRuntime,
+    onToolCall,
+    onToolResult,
   } = questionObj ?? {};
   const targetModel = model || config.model || DEFAULT_MODEL;
   const requestMessages = [...contextMessageList, ...messages];
@@ -147,17 +181,39 @@ export async function getAIResponse(questionObj) {
     if (message.tool_calls?.length) {
       for (const toolCall of message.tool_calls) {
         const functionName = toolCall.function.name;
-        const functionArgs = JSON.parse(toolCall.function.arguments || "{}");
-        const excuteResult = await excuteTool(
-          toolRuntime,
-          functionName,
-          functionArgs
-        );
+        let toolResultContent = "";
+
+        try {
+          const functionArgs = parseToolArguments(toolCall.function.arguments);
+
+          await onToolCall?.({
+            name: functionName,
+            args: functionArgs,
+          });
+
+          toolResultContent = await excuteTool(
+            toolRuntime,
+            functionName,
+            functionArgs
+          );
+
+          await onToolResult?.({
+            name: functionName,
+            result: toolResultContent,
+          });
+        } catch (error) {
+          toolResultContent = `工具执行失败: ${error.message}`;
+
+          await onToolResult?.({
+            name: functionName,
+            result: toolResultContent,
+          });
+        }
 
         messages.push({
           tool_call_id: toolCall.id,
           role: "tool",
-          content: excuteResult,
+          content: toolResultContent,
         });
       }
 
@@ -167,6 +223,8 @@ export async function getAIResponse(questionObj) {
         messages,
         model,
         toolRuntime,
+        onToolCall,
+        onToolResult,
       });
     }
 

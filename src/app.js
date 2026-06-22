@@ -60,6 +60,52 @@ let hasSavedHistory = false;
 let isClosing = false;
 let inputInitialized = false;
 
+function isInteractiveTool(toolName) {
+  return toolName === "confirm" || toolName === "select";
+}
+
+/**
+ * 将文本压缩为终端友好的单行摘要，避免长内容破坏对话节奏。
+ *
+ * @param {string} text - 原始文本。
+ * @param {number} [maxLength=120] - 允许显示的最大长度。
+ * @returns {string} 摘要文本。
+ */
+function summarizeForTerminal(text, maxLength = 120) {
+  const normalizedText = String(text ?? "").replace(/\s+/g, " ").trim();
+
+  if (!normalizedText) {
+    return "";
+  }
+
+  if (normalizedText.length <= maxLength) {
+    return normalizedText;
+  }
+
+  return `${normalizedText.slice(0, maxLength - 3)}...`;
+}
+
+/**
+ * 将工具参数转换成短文本，便于在终端中显示当前调用上下文。
+ *
+ * @param {Record<string, any>} args - 工具参数对象。
+ * @param {number} [maxLength=160] - 最大显示长度。
+ * @returns {string} 参数摘要文本。
+ */
+function summarizeToolArgs(args, maxLength = 160) {
+  try {
+    const serializedArgs = JSON.stringify(args ?? {});
+
+    if (serializedArgs.length <= maxLength) {
+      return serializedArgs;
+    }
+
+    return `${serializedArgs.slice(0, maxLength - 3)}...`;
+  } catch {
+    return "[无法序列化参数]";
+  }
+}
+
 function persistHistory() {
   if (hasSavedHistory) {
     return null;
@@ -96,6 +142,37 @@ function cleanupInput() {
   process.stdin.pause();
   clearInputFrame();
   inputInitialized = false;
+}
+
+function suspendInputLoopForToolPrompt() {
+  if (!inputInitialized) {
+    return;
+  }
+
+  process.stdin.removeListener("keypress", handleKeypress);
+
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(false);
+  }
+
+  clearInputFrame();
+  inputInitialized = false;
+}
+
+function resumeInputLoopAfterToolPrompt() {
+  if (inputInitialized || isClosing) {
+    return;
+  }
+
+  readline.emitKeypressEvents(process.stdin);
+
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+  }
+
+  process.stdin.resume();
+  process.stdin.on("keypress", handleKeypress);
+  inputInitialized = true;
 }
 
 function safeClose() {
@@ -455,6 +532,9 @@ async function submitCurrentInput() {
   clearInputFrame();
 
   try {
+    logger.log("", "white");
+    logger.log(`你：${trimmedInput}`, "cyan");
+
     const rulesContext = await getRulesContext(state.selectedContextFile);
     const rulesContextMessage = rulesContext
       ? {
@@ -480,6 +560,40 @@ async function submitCurrentInput() {
     });
 
     const spinner = ora("AI 正在思考...").start();
+    let toolPromptSuspended = false;
+
+    const handleToolCall = async ({ name, args }) => {
+      spinner.stop();
+      logger.log(
+        `AI 正在调用工具: ${name} ${summarizeToolArgs(args)}`,
+        "magenta"
+      );
+
+      if (isInteractiveTool(name)) {
+        suspendInputLoopForToolPrompt();
+        toolPromptSuspended = true;
+        return;
+      }
+
+      spinner.start("AI 正在继续处理...");
+    };
+    const handleToolResult = async ({ name, result }) => {
+      if (toolPromptSuspended && isInteractiveTool(name)) {
+        resumeInputLoopAfterToolPrompt();
+        toolPromptSuspended = false;
+      }
+
+      spinner.stop();
+      const resultSummary = summarizeForTerminal(result, 100);
+
+      logger.log(
+        resultSummary
+          ? `工具执行完成: ${name} -> ${resultSummary}`
+          : `工具执行完成: ${name}`,
+        "gray"
+      );
+      spinner.start("AI 正在继续处理...");
+    };
 
     try {
       const nowMessage = await getAIResponse({
@@ -492,6 +606,8 @@ async function submitCurrentInput() {
           ...(rulesContextMessage ? [rulesContextMessage] : []),
         ],
         messages,
+        onToolCall: handleToolCall,
+        onToolResult: handleToolResult,
       });
       const lastAssistantMessage = [...nowMessage]
         .reverse()
